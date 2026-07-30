@@ -124,14 +124,29 @@ class KeySelectView(ui.View):
 class PanelView(ui.View):
     def __init__(self, script_id: str):
         super().__init__(timeout=None)
+        # Store script_id for later use in callbacks
         self.script_id = script_id
+        # Update each button's custom_id to include the script_id
+        for child in self.children:
+            if isinstance(child, ui.Button):
+                # child.custom_id is set via decorator; we append script_id
+                child.custom_id = f"{child.custom_id}:{script_id}"
+
+    # Helper to extract script_id from custom_id
+    def _get_script_id(self, custom_id: str) -> str:
+        # custom_id format: "panel:action:script_id"
+        parts = custom_id.split(':')
+        return parts[-1]  # last part is the script_id
 
     @ui.button(label="Redeem Key", emoji="🔑", style=ButtonStyle.green, custom_id="panel:redeem")
     async def redeem_btn(self, interaction: discord.Interaction, button: ui.Button):
-        current_script_id = self.script_id
+        script_id = self._get_script_id(interaction.data['custom_id'])
+        current_script_id = script_id  # capture for modal
+
         class SafeRedeemModal(ui.Modal, title="Redeem Your Key"):
             key_input = ui.TextInput(label="Enter Your Key", placeholder="NllN-llNl-NNlN-lNNl", min_length=19, max_length=19, required=True)
             async def on_submit(self, modal_interaction: discord.Interaction):
+                # --- VALIDATION (unchanged) ---
                 key_val = self.key_input.value.strip().lower()
                 key_data = keys_col.find_one({"key": key_val, "active": True})
                 if not key_data:
@@ -147,17 +162,20 @@ class PanelView(ui.View):
                     await modal_interaction.response.send_message("❌ No uses remaining on this key", ephemeral=True)
                     return
 
+                # --- DATABASE UPDATE ---
                 keys_col.update_one({"key": key_val},{"$set":{"user_id": str(modal_interaction.user.id), "redeemed_at": datetime.now(timezone.utc)}})
                 if key_data.get("uses_left") is not None:
                     keys_col.update_one({"key": key_val},{"$inc":{"uses_left": -1}})
 
                 script_data = scripts_col.find_one({"script_id": key_data["script_id"]})
 
+                # --- SEND SUCCESS MESSAGE FIRST (closes modal) ---
                 await modal_interaction.response.send_message(
                     f"✅ Successfully redeemed key for **{script_data['name']}**",
                     ephemeral=True
                 )
 
+                # --- ROLE ASSIGNMENT (with error handling, does not affect success message) ---
                 if script_data.get("auto_apply") and script_data.get("role_id"):
                     try:
                         role = modal_interaction.guild.get_role(int(script_data["role_id"]))
@@ -177,14 +195,15 @@ class PanelView(ui.View):
 
     @ui.button(label="Get Script", emoji="📜", style=ButtonStyle.blurple, custom_id="panel:getscript")
     async def getscript_btn(self, interaction: discord.Interaction, button: ui.Button):
-        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
+        script_id = self._get_script_id(interaction.data['custom_id'])
+        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": script_id, "active": True}))
         if not user_keys:
             return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
         if len(user_keys) == 1:
             domain = get_clean_domain()
             k = user_keys[0]
-            script = scripts_col.find_one({"script_id": self.script_id})
-            file_url = f"https://{domain}/v3/loaders/file/{self.script_id}.lua"
+            script = scripts_col.find_one({"script_id": script_id})
+            file_url = f"https://{domain}/v3/loaders/file/{script_id}.lua"
             file_content = f'getgenv().SCRIPT_KEY = "{k["key"]}"\nloadstring(game:HttpGet("{file_url}"))()'
             file = File(io.BytesIO(file_content.encode("utf-8")), filename=script["filename"])
             emb = discord.Embed(title="📜 Your Script", color=0x2ecc71)
@@ -195,10 +214,11 @@ class PanelView(ui.View):
 
     @ui.button(label="Get Role", emoji="👤", style=ButtonStyle.blurple, custom_id="panel:getrole")
     async def getrole_btn(self, interaction: discord.Interaction, button: ui.Button):
-        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
+        script_id = self._get_script_id(interaction.data['custom_id'])
+        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": script_id, "active": True}))
         if not user_keys:
             return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
-        script = scripts_col.find_one({"script_id": self.script_id})
+        script = scripts_col.find_one({"script_id": script_id})
         if not script or not script.get("role_id"):
             return await interaction.response.send_message("❌ No role configured for this script", ephemeral=True)
         role = interaction.guild.get_role(int(script["role_id"]))
@@ -211,21 +231,25 @@ class PanelView(ui.View):
 
     @ui.button(label="Reset HWID", emoji="⚙️", style=ButtonStyle.grey, custom_id="panel:resethwid")
     async def resethwid_btn(self, interaction: discord.Interaction, button: ui.Button):
-        existing = hwid_col.find_one({"user_id": str(interaction.user.id), "script_id": self.script_id})
+        script_id = self._get_script_id(interaction.data['custom_id'])
+        # --- Check if HWID record exists before clearing ---
+        existing = hwid_col.find_one({"user_id": str(interaction.user.id), "script_id": script_id})
         if not existing:
             await interaction.response.send_message("❌ Your script has not been executed yet.", ephemeral=True)
             return
-        hwid_col.delete_many({"user_id": str(interaction.user.id), "script_id": self.script_id})
+        # Clear HWID
+        hwid_col.delete_many({"user_id": str(interaction.user.id), "script_id": script_id})
         await interaction.response.send_message("✅ HWID cleared. Will re-register on next run", ephemeral=True)
 
     @ui.button(label="Get Stats", emoji="📊", style=ButtonStyle.grey, custom_id="panel:getstats")
     async def getstats_btn(self, interaction: discord.Interaction, button: ui.Button):
-        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
+        script_id = self._get_script_id(interaction.data['custom_id'])
+        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": script_id, "active": True}))
         if not user_keys:
             return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
         if len(user_keys) == 1:
             k = user_keys[0]
-            script = scripts_col.find_one({"script_id": self.script_id})
+            script = scripts_col.find_one({"script_id": script_id})
             uses = k["uses_left"] if k["uses_left"] is not None else "Unlimited"
             exp = "Never"
             if k.get("expires_at"): exp = k["expires_at"].strftime("%Y-%m-%d %H:%M UTC")
@@ -240,7 +264,10 @@ class PanelView(ui.View):
 
 @bot.event
 async def on_ready():
-    bot.add_view(PanelView("placeholder"))
+    # Load all scripts and add a persistent view for each
+    for script in scripts_col.find({}):
+        script_id = script["script_id"]
+        bot.add_view(PanelView(script_id))
     await tree.sync()
     print(f"✅ Bot Ready | Logged in as {bot.user}")
 
@@ -248,20 +275,23 @@ async def on_ready():
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(role_id="Role ID to assign", auto_apply="Auto grant role", provider="Provider name (optional)", file="Lua or text file", embed_title="Panel title", embed_description="Panel description")
 async def create_script_cmd(interaction: discord.Interaction, role_id: str, auto_apply: bool, file: discord.Attachment, embed_title: str, embed_description: str = None, provider: str = None):
-    # --- Defer ephemerally to hide the attachment preview ---
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=False)
     if not file.filename.endswith((".lua", ".txt")):
         return await interaction.followup.send("❌ Only .lua or .txt files supported", ephemeral=True)
     file_content = await file.read()
     script_id = os.urandom(16).hex()
 
+    # --- Send obfuscation status (ephemeral) ---
     status_msg = await interaction.followup.send("📄 Your Lua is still in Obfuscation..", ephemeral=True)
 
+    # --- Obfuscate the content ---
     obfuscated = obfuscate_lua(file_content.decode("utf-8", errors="replace"))
 
+    # --- Wait a moment so the status can be read, then delete it ---
     await asyncio.sleep(2)
     await status_msg.delete()
 
+    # --- Continue with script creation ---
     if not embed_description:
         embed_description = "**TO ACCESS SCRIPT VIA:**\n1. 🔑 Click the Redeem Key\n2. 📜 Click the Get Script\n3. 👤 Click the Get Role\n4. 📊 Click the Get Stats\n5. ⚙️ Click the Reset HWID (If needed)"
     script_data = {
