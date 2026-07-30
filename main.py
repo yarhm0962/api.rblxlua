@@ -47,6 +47,44 @@ def get_clean_domain():
 def hash_hwid(raw_hwid):
     return hashlib.sha256(str(raw_hwid).strip().lower().encode()).hexdigest()
 
+# -------------------------------------------------------------------
+# Simple Lua obfuscator: XOR + hex encoding with a random key
+# -------------------------------------------------------------------
+def obfuscate_lua(code: str) -> str:
+    # Generate a random 8‑character key (letters and digits)
+    key = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    # Encode the code to bytes, then XOR with the key (cyclically)
+    data = code.encode('utf-8')
+    key_bytes = key.encode('utf-8')
+    xored = bytearray()
+    for i, b in enumerate(data):
+        xored.append(b ^ key_bytes[i % len(key_bytes)])
+    # Convert to hex string
+    hex_str = xored.hex()
+    # Build the Lua loader that decodes and executes
+    loader = f"""local key = "{key}"
+local encoded = "{hex_str}"
+local function decode(str)
+    local out = {{}}
+    local key_bytes = {{string.byte(key, 1, #key)}}
+    for i = 1, #str, 2 do
+        local byte = tonumber(str:sub(i, i+1), 16)
+        if byte then
+            local k = key_bytes[((i-1)//2) % #key_bytes + 1]
+            table.insert(out, string.char(byte ~ k))
+        end
+    end
+    return table.concat(out)
+end
+local obfuscated = decode(encoded)
+local fn, err = loadstring(obfuscated)
+if not fn then error("Obfuscation load failed: " .. tostring(err)) end
+fn()
+"""
+    return loader
+
+# -------------------------------------------------------------------
+
 full_protection = '''local _v_t = type;local _v_p = pcall;local _v_xp = xpcall;local _v_r = rawget;local _v_rs = rawset;local _v_ts = tostring;local _v_req = rawequal;local _v_g = getfenv and getfenv() or _ENV or _G;local _v_err = error;local _v_sm = setmetatable;local function _v_logDetect()_v_p(_v_err, "Environment tampered");while true do end;end;local _real_dbg = _v_g["debug"];local _orig_di = _real_dbg and (_v_r(_real_dbg, "info") or _v_r(_real_dbg, "getinfo"));local _orig_tb = _real_dbg and _v_r(_real_dbg, "traceback");local _orig_gu = _real_dbg and _v_r(_real_dbg, "getupvalue");local _orig_su = _real_dbg and _v_r(_real_dbg, "setupvalue");local _iscc = _v_g["iscclosure"];local function _c_v(_fn)if _v_t(_fn) ~= "function" then return false end;if _iscc then local _s, _res = _v_p(_iscc, _fn);if _s and not _res then return false end end;if _orig_di then local _s, _res = _v_p(_orig_di, _fn);if _s and _v_t(_res) == "table" then if _res.what ~= "C" then return false end end end;return true;end;if not _c_v(_v_t) then _v_logDetect() end;if not _c_v(_v_p) then _v_logDetect() end;if not _c_v(_v_xp) then _v_logDetect() end;if not _c_v(_v_sm) then _v_logDetect() end;if not _c_v(_v_req) then _v_logDetect() end;if not _c_v(_v_r) then _v_logDetect() end;if not _c_v(_v_rs) then _v_logDetect() end;local _np = _v_g["newproxy"];local _secret_k = (_np and _c_v(_np)) and _np(false) or {};local _secret_v = (_np and _c_v(_np)) and _np(false) or {};local _proxy_active = false;local _self_ref;local function _v_tamperCheck()local _s1, _v3 = _v_p(function() return _v_g["Vector3"] end);if _s1 and _v3 then if not _c_v(_v3.new) then _v_logDetect() end;local _s2, _v3Res = _v_p(_v_ts, _v3.new(0,0,0));if _s2 and _v3Res ~= "0, 0, 0" then _v_logDetect() end end;local _s3, _en = _v_p(function() return _v_g["Enum"] end);if _s3 and _en then local _enT = _v_t(_en);if _enT ~= "userdata" and _enT ~= "table" then _v_logDetect() end end;if _v_g["print"] and not _c_v(_v_g["print"]) then _v_logDetect() end;if _v_g["warn"] and not _c_v(_v_g["warn"]) then _v_logDetect() end;if _v_g["error"] and not _c_v(_v_g["error"]) then _v_logDetect() end;if _proxy_active and _self_ref then local _s, _r = _v_p(function() return _self_ref[_secret_k] end);if not _s or not _v_req(_r, _secret_v) then _v_logDetect() end end;end;_v_tamperCheck();local _spoofMap = _v_sm({}, {__mode = "k"});local function _proxy_di(...)local _a1 = ...;if _v_t(_a1) == "function" and _v_r(_spoofMap, _a1) then _v_logDetect() end;if _orig_di then local _s, _res = _v_p(_orig_di, ...);if not _s then _v_logDetect() end;return _res end;return nil;end;local function _proxy_tb(...)if _orig_tb then local _s, _res = _v_p(_orig_tb, ...);return _res end;return "";end;local function _proxy_up(...)local _a1 = ...;if _v_t(_a1) == "function" and _v_r(_spoofMap, _a1) then _v_logDetect() end;if _orig_gu then local _s, _r1, _r2 = _v_p(_orig_gu, ...);if not _s then _v_logDetect() end;return _r1, _r2 end;return nil;end;local _s_cc, _newcc = _v_p(function() return _v_g["newcclosure"] end);_newcc = (_s_cc and _c_v(_newcc)) and _newcc or None;local function _wrap(_fn)if _v_t(_fn) ~= "function" then return _fn end;local _proxy;if _newcc then _proxy = _newcc(function(...) _v_tamperCheck();return _fn(...) end);else _proxy = function(...) _v_tamperCheck();return _fn(...) end end;_v_rs(_spoofMap, _proxy, _fn);return _proxy;end;local _mt = {};_self_ref = _v_sm({}, _mt);local _ex_blk = {getrawmetatable = True, setrawmetatable = True, getreg = True, getgc = True, getgenv = True, getrenv = True, getupvalues = True, getupvalue = True, setupvalue = True};_mt.__index = function(_self, _k)if _v_req(_k, _secret_k) then return _secret_v end;_v_tamperCheck();if _k == "debug" then local _dbg_mt = {};local _dbg_proxy = _v_sm({["info"] = _proxy_di, ["getinfo"] = _proxy_di, ["traceback"] = _proxy_tb, ["getupvalue"] = _proxy_up, ["setupvalue"] = _proxy_up}, _dbg_mt);_dbg_mt.__index = function(_, _dk)local _r = _real_dbg and _v_r(_real_dbg, _dk);if _v_t(_r) == "function" then return _wrap(_r) end;return _r end;_dbg_mt.__newindex = function() _v_logDetect() end;_dbg_mt.__metatable = False;return _dbg_proxy end;if _v_r(_ex_blk, _k) then return function() _v_logDetect();return None end end;if _k == "iscclosure" and _iscc then return function(_fn)if _v_r(_spoofMap, _fn) then _v_logDetect() end;return _c_v(_fn) end end;if _k == "tostring" and _v_ts then return function(_fn)if _v_r(_spoofMap, _fn) then _v_logDetect() end;return _v_ts(_fn) end end;if _k == "getfenv" then return function(_l)local _lvl = _v_t(_l) == "number" and _l or 1;if _lvl > 1 then _v_logDetect() end;return _self_ref end end;local _s, _r = _v_p(function() return _v_g[_k] end);if _s and _r is not None then if _v_t(_r) == "function" then return _wrap(_r) end;return _r end;return None;end;_mt.__newindex = function(_self, _k, _val)_v_tamperCheck();_v_p(function() _v_g[_k] = _val end) end;local function _pnlty() _v_logDetect();return function() end end;_mt.__pairs = _pnlty;_mt.__ipairs = _pnlty;_mt.__len = function() _v_logDetect();return 0 end;_mt.__tostring = function() _v_logDetect();return '' end;_mt.__call = _pnlty;_mt.__concat = _pnlty;_mt.__unm = _pnlty;_mt.__add = _pnlty;_mt.__sub = _pnlty;_mt.__mul = _pnlty;_mt.__div = _pnlty;_mt.__mod = _pnlty;_mt.__pow = _pnlty;_mt.__metatable = False;_proxy_active = True;local _s_set, _setfenv = _v_p(function() return _v_g["setfenv"] end);if _s_set and _v_t(_setfenv) == "function" then if not _c_v(_setfenv) then _v_logDetect() end;_v_p(function() local _s_ge, _rEnv = _v_p(getfenv, 2);if _s_ge and not _v_req(_rEnv, _self_ref) then _setfenv(2, _self_ref) end end) end;local _envProxy = _self_ref;local getfenv = function() return _envProxy end;local _ENV = _envProxy;local _G = _envProxy;local AntiTamper = {};local function random_str()local s = "";for i = 1, math.random(7, 12) do s = s .. string.char(math.random(97, 122)) end;return s;end;local function to_hex(str)local out = "";for i = 1, #str do out = out .. "\\" .. str:byte(i) end;return '"' .. out .. '"';end;function AntiTamper.apply(src)local lines = {};local counter = "c_" .. random_str();local add = "add_" .. random_str();table.insert(lines, "local " .. counter .. " = 0");table.insert(lines, "local function " .. add .. "() " .. counter .. " = " .. counter .. " + 1 end");local checks = {[[local b = buffer.create(16)buffer.writeu32(b, 0, 0xDEADBEEF)if buffer.readu32(b, 0) ~= 3735928559 or buffer.len(b) ~= 16 then ]] .. add .. [[() end]],[[local b2 = buffer.create(4)buffer.writeu8(b2, 0, 255)if buffer.readu8(b2, 0) ~= 255 then ]] .. add .. [[() end]],[[if game:GetService(]] .. to_hex("RunService") .. [[):IsStudio() then ]] .. add .. [[() end]],[[if #game:GetService(]] .. to_hex("HttpService") .. [[):JSONEncode({test = 123}) < 5 then ]] .. add .. [[() end]],[[if workspace.Gravity == 0 or workspace:FindFirstChild(]] .. to_hex("NonExistentChild") .. [[) then ]] .. add .. [[() end]]};for i = #checks, 2, -1 do local j = math.random(i);checks[i], checks[j] = checks[j], checks[i] end;for _, code in ipairs(checks) do table.insert(lines, "pcall(function() " .. code .. " end)") end;local msg = to_hex("Security Violation");table.insert(lines, [[if ]] .. counter .. [[ > 0 then local p = game.Players.LocalPlayer;if p then p:Kick(]] .. msg .. [[) end;while true do task.wait();pcall(function() error(]] .. msg .. [[, 0) end) end end]]);return "task.spawn(function()\n" .. table.concat(lines, "\n") .. "\nend)\n" .. src;end'''
 
 class KeySelectView(ui.View):
@@ -133,18 +171,15 @@ class PanelView(ui.View):
                         if role:
                             await modal_interaction.user.add_roles(role)
                         else:
-                            # Role not found – send a follow‑up error
                             await modal_interaction.followup.send(
                                 "⚠️ Role could not be assigned (role not found). Please contact an admin.",
                                 ephemeral=True
                             )
                     except (ValueError, discord.Forbidden, discord.HTTPException) as e:
-                        # Invalid role ID, missing permissions, etc.
                         await modal_interaction.followup.send(
                             f"⚠️ Role could not be assigned due to an error: {str(e)}",
                             ephemeral=True
                         )
-                # No return needed – modal already closed
         await interaction.response.send_modal(SafeRedeemModal())
 
     @ui.button(label="Get Script", emoji="📜", style=ButtonStyle.blurple, custom_id="panel:getscript")
@@ -183,9 +218,12 @@ class PanelView(ui.View):
 
     @ui.button(label="Reset HWID", emoji="⚙️", style=ButtonStyle.grey, custom_id="panel:resethwid")
     async def resethwid_btn(self, interaction: discord.Interaction, button: ui.Button):
-        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
-        if not user_keys:
-            return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
+        # --- Check if HWID record exists before clearing ---
+        existing = hwid_col.find_one({"user_id": str(interaction.user.id), "script_id": self.script_id})
+        if not existing:
+            await interaction.response.send_message("❌ Your script has not been executed yet.", ephemeral=True)
+            return
+        # Clear HWID
         hwid_col.delete_many({"user_id": str(interaction.user.id), "script_id": self.script_id})
         await interaction.response.send_message("✅ HWID cleared. Will re-register on next run", ephemeral=True)
 
@@ -224,11 +262,22 @@ async def create_script_cmd(interaction: discord.Interaction, role_id: str, auto
         return await interaction.followup.send("❌ Only .lua or .txt files supported", ephemeral=True)
     file_content = await file.read()
     script_id = os.urandom(16).hex()
+
+    # --- Send obfuscation status (ephemeral) ---
+    status_msg = await interaction.followup.send("📄 Your Lua is still in Obfuscation..", ephemeral=True)
+
+    # --- Obfuscate the content ---
+    obfuscated = obfuscate_lua(file_content.decode("utf-8", errors="replace"))
+
+    # --- Delete the status message ---
+    await status_msg.delete()
+
+    # --- Continue with script creation ---
     if not embed_description:
         embed_description = "**TO ACCESS SCRIPT VIA:**\n1. 🔑 Click the Redeem Key\n2. 📜 Click the Get Script\n3. 👤 Click the Get Role\n4. 📊 Click the Get Stats\n5. ⚙️ Click the Reset HWID (If needed)"
     script_data = {
         "script_id": script_id, "name": embed_title, "role_id": role_id, "auto_apply": auto_apply,
-        "provider": provider, "filename": file.filename, "content": file_content.decode("utf-8", errors="replace"),
+        "provider": provider, "filename": file.filename, "content": obfuscated,  # store obfuscated content
         "embed_title": embed_title, "embed_description": embed_description, "created_at": datetime.now(timezone.utc)
     }
     scripts_col.insert_one(script_data)
@@ -270,6 +319,7 @@ def serve_script(script_id):
     if not script:
         return "Not Found", 404
 
+    # The stored content is already obfuscated; we wrap it with protection and key check
     key_check_code = '''local _K = getgenv and getgenv().SCRIPT_KEY or _G.SCRIPT_KEY or ""
 if not _K or #_K ~= 19 then game:GetService("Players").LocalPlayer:Kick("Missing or invalid SCRIPT_KEY\\nSet: getgenv().SCRIPT_KEY = \"YOUR_KEY\"") return end
 local _D = "''' + get_clean_domain() + '''"
