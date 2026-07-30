@@ -97,6 +97,7 @@ class PanelView(ui.View):
         class SafeRedeemModal(ui.Modal, title="Redeem Your Key"):
             key_input = ui.TextInput(label="Enter Your Key", placeholder="NllN-llNl-NNlN-lNNl", min_length=19, max_length=19, required=True)
             async def on_submit(self, modal_interaction: discord.Interaction):
+                # --- VALIDATION (unchanged) ---
                 key_val = self.key_input.value.strip().lower()
                 key_data = keys_col.find_one({"key": key_val, "active": True})
                 if not key_data:
@@ -111,16 +112,39 @@ class PanelView(ui.View):
                 if key_data.get("uses_left") is not None and key_data["uses_left"] <= 0:
                     await modal_interaction.response.send_message("❌ No uses remaining on this key", ephemeral=True)
                     return
+
+                # --- DATABASE UPDATE ---
                 keys_col.update_one({"key": key_val},{"$set":{"user_id": str(modal_interaction.user.id), "redeemed_at": datetime.now(timezone.utc)}})
                 if key_data.get("uses_left") is not None:
                     keys_col.update_one({"key": key_val},{"$inc":{"uses_left": -1}})
+
                 script_data = scripts_col.find_one({"script_id": key_data["script_id"]})
+
+                # --- SEND SUCCESS MESSAGE FIRST (closes modal) ---
+                await modal_interaction.response.send_message(
+                    f"✅ Successfully redeemed key for **{script_data['name']}**",
+                    ephemeral=True
+                )
+
+                # --- ROLE ASSIGNMENT (with error handling, does not affect success message) ---
                 if script_data.get("auto_apply") and script_data.get("role_id"):
-                    role = modal_interaction.guild.get_role(int(script_data["role_id"]))
-                    if role:
-                        await modal_interaction.user.add_roles(role)
-                await modal_interaction.response.send_message(f"✅ Successfully redeemed key for **{script_data['name']}**", ephemeral=True)
-                return  # ensure we exit cleanly
+                    try:
+                        role = modal_interaction.guild.get_role(int(script_data["role_id"]))
+                        if role:
+                            await modal_interaction.user.add_roles(role)
+                        else:
+                            # Role not found – send a follow‑up error
+                            await modal_interaction.followup.send(
+                                "⚠️ Role could not be assigned (role not found). Please contact an admin.",
+                                ephemeral=True
+                            )
+                    except (ValueError, discord.Forbidden, discord.HTTPException) as e:
+                        # Invalid role ID, missing permissions, etc.
+                        await modal_interaction.followup.send(
+                            f"⚠️ Role could not be assigned due to an error: {str(e)}",
+                            ephemeral=True
+                        )
+                # No return needed – modal already closed
         await interaction.response.send_modal(SafeRedeemModal())
 
     @ui.button(label="Get Script", emoji="📜", style=ButtonStyle.blurple, custom_id="panel:getscript")
@@ -209,7 +233,7 @@ async def create_script_cmd(interaction: discord.Interaction, role_id: str, auto
     }
     scripts_col.insert_one(script_data)
     panel_emb = discord.Embed(title=embed_title, description=embed_description, color=0x3498db)
-    panel_emb.set_footer(text=script_id)   # Only the script_id, no extra text
+    panel_emb.set_footer(text=f"SCRIPT_ID: {script_id}")   # Exactly as requested
     view = PanelView(script_id)
     panel_msg = await interaction.followup.send(embed=panel_emb, view=view)
     scripts_col.update_one({"script_id": script_id}, {"$set": {"panel_message_id": str(panel_msg.id), "panel_channel_id": str(interaction.channel.id)}})
