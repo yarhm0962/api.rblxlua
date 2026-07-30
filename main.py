@@ -13,7 +13,7 @@ from flask import Flask
 
 TOKEN = os.getenv("TOKEN")
 MONGODB_URI = os.getenv("MONGODB_URI")
-SCRIPT_DOMAIN = "api.rblxlua.dev"
+WEBSITE_DOMAIN = os.getenv("WEBSITE_DOMAIN")
 
 app = Flask(__name__)
 
@@ -85,10 +85,10 @@ class PanelView(ui.View):
         script = scripts_col.find_one({"script_id": self.script_id})
         if not script:
             return await interaction.response.send_message("❌ Script not found", ephemeral=True)
-        file_content = f'getgenv().SCRIPT_KEY = "{user_key["key"]}"\n\nloadstring(game:HttpGet("https://{SCRIPT_DOMAIN}/v3/download/public/{self.script_id}.lua"))()'
+        file_content = f'getgenv().SCRIPT_KEY = "{user_key["key"]}"\n\nloadstring(game:HttpGet("https://{WEBSITE_DOMAIN}/v3/loaders/file/net.{self.script_id}.lua"))()'
         file = File(io.BytesIO(file_content.encode("utf-8")), filename=script["filename"])
         emb = discord.Embed(title="📜 Your Script", color=0x2ecc71)
-        emb.add_field(name="Loader", value=f"`getgenv().SCRIPT_KEY = \"{user_key['key']}\"`\n`loadstring(game:HttpGet(\"https://{SCRIPT_DOMAIN}/v3/download/public/{self.script_id}.lua\"))()`", inline=False)
+        emb.add_field(name="Loader", value=f"`getgenv().SCRIPT_KEY = \"{user_key['key']}\"`\n`loadstring(game:HttpGet(\"https://{WEBSITE_DOMAIN}/v3/loaders/file/net.{self.script_id}.lua\"))()`", inline=False)
         await interaction.response.send_message(embed=emb, file=file, ephemeral=True)
 
     @ui.button(label="Get Role", emoji="👤", style=ButtonStyle.blurple, custom_id="panel:getrole")
@@ -122,7 +122,7 @@ class PanelView(ui.View):
             return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
         script = scripts_col.find_one({"script_id": self.script_id})
         uses = user_key["uses_left"] if user_key["uses_left"] is not None else "Unlimited"
-        exp = " Never"
+        exp = "Never"
         if user_key["expires_at"]:
             exp = user_key["expires_at"].strftime("%Y-%m-%d %H:%M UTC")
         emb = discord.Embed(title="📊 Your Stats", color=0x95a5a6)
@@ -211,11 +211,16 @@ async def generate_key_cmd(
     embed.add_field(name="Expires", value=f"{expires_days} days" if expires_days>0 else "Never", inline=False)
     await interaction.followup.send(embed=embed)
 
-@app.route('/v3/download/public/<script_id>.lua')
+@app.route('/v3/loaders/file/net.<script_id>.lua')
 def serve_script(script_id):
     script = scripts_col.find_one({"script_id": script_id})
     if not script: return "Not Found", 404
     return script["content"], 200, {"Content-Type":"text/plain; charset=utf-8"}
 
+from threading import Thread
+def run_flask():
+    app.run(host="0.0.0.0", port=10000, use_reloader=False)
+
 if __name__ == "__main__":
+    Thread(target=run_flask, daemon=True).start()
     bot.run(TOKEN)
