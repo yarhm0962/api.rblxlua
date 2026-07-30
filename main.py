@@ -3,6 +3,7 @@ import random
 import string
 import io
 import hashlib
+import asyncio  # <-- added for sleep
 from datetime import datetime, timedelta, timezone
 from threading import Thread
 import discord
@@ -269,7 +270,8 @@ async def create_script_cmd(interaction: discord.Interaction, role_id: str, auto
     # --- Obfuscate the content ---
     obfuscated = obfuscate_lua(file_content.decode("utf-8", errors="replace"))
 
-    # --- Delete the status message ---
+    # --- Wait a moment so the status can be read, then delete it ---
+    await asyncio.sleep(2)  # <-- ensures the status is visible for 2 seconds
     await status_msg.delete()
 
     # --- Continue with script creation ---
