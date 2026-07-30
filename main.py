@@ -1,5 +1,4 @@
 import os
-import asyncio
 import random
 import string
 import io
@@ -139,38 +138,38 @@ async def on_ready():
     await tree.sync()
     print(f"Ready: {bot.user}")
 
-@tree.command(name="create_script", description="Create new script and control panel")
+@tree.command(name="create-script", description="Create new script and control panel")
 @app_commands.checks.has_permissions(administrator=True)
 async def create_script_cmd(
     interaction: discord.Interaction,
-    role_id: str,
-    auto_apply: bool,
+    role-id: str,
+    auto-apply: bool,
     provider: str,
     file: discord.Attachment,
-    embed_title: str,
-    embed_description: str = None
+    embed-title: str,
+    embed-description: str = None
 ):
     await interaction.response.defer()
     if not file.filename.endswith((".lua", ".txt")):
         return await interaction.followup.send("❌ Only .lua or .txt allowed", ephemeral=True)
     file_content = await file.read()
     script_id = os.urandom(16).hex()
-    if not embed_description:
-        embed_description = f"This control panel is for the project: **{embed_title}**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or get your role"
+    if not embed-description:
+        embed-description = f"This control panel is for the project: **{embed-title}**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or get your role"
     script_data = {
         "script_id": script_id,
-        "name": embed_title,
-        "role_id": role_id,
-        "auto_apply": auto_apply,
+        "name": embed-title,
+        "role_id": role-id,
+        "auto_apply": auto-apply,
         "provider": provider,
         "filename": file.filename,
         "content": file_content.decode("utf-8", errors="replace"),
-        "embed_title": embed_title,
-        "embed_description": embed_description,
+        "embed_title": embed-title,
+        "embed_description": embed-description,
         "created_at": datetime.now(timezone.utc)
     }
     scripts_col.insert_one(script_data)
-    panel_emb = discord.Embed(title=embed_title, description=embed_description, color=0x3498db)
+    panel_emb = discord.Embed(title=embed-title, description=embed-description, color=0x3498db)
     panel_emb.set_footer(text=f"Script ID: {script_id} | Provider: {provider}")
     view = PanelView(script_id)
     panel_msg = await interaction.followup.send(embed=panel_emb, view=view)
@@ -180,27 +179,27 @@ async def create_script_cmd(
     confirm_emb.add_field(name="Panel Created", value="✅ Sent here", inline=False)
     await interaction.followup.send(embed=confirm_emb, ephemeral=True)
 
-@tree.command(name="generate_key", description="Generate new access key")
+@tree.command(name="generate-key", description="Generate new access key")
 @app_commands.checks.has_permissions(administrator=True)
 async def generate_key_cmd(
     interaction: discord.Interaction,
-    script_id: str,
-    max_uses: int = 0,
-    expires_days: int = 0
+    script-id: str,
+    max-uses: int = 0,
+    expires-days: int = 0
 ):
     await interaction.response.defer()
-    exists = scripts_col.find_one({"script_id": script_id})
+    exists = scripts_col.find_one({"script_id": script-id})
     if not exists:
         return await interaction.followup.send("❌ Script ID not found", ephemeral=True)
     key_value = generate_formatted_key()
     expires_at = None
-    if expires_days > 0:
-        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
+    if expires-days > 0:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expires-days)
     key_data = {
         "key": key_value,
-        "script_id": script_id,
-        "uses_left": max_uses if max_uses > 0 else None,
-        "max_uses": max_uses,
+        "script_id": script-id,
+        "uses_left": max-uses if max-uses > 0 else None,
+        "max_uses": max-uses,
         "expires_at": expires_at,
         "active": True,
         "created_at": datetime.now(timezone.utc)
@@ -208,9 +207,9 @@ async def generate_key_cmd(
     keys_col.insert_one(key_data)
     embed = discord.Embed(title="✅ Key Generated", color=0x3498db)
     embed.add_field(name="Key", value=f"`{key_value}`", inline=False)
-    embed.add_field(name="For Script", value=f"`{script_id}`", inline=False)
-    embed.add_field(name="Max Uses", value=f"{max_uses}" if max_uses>0 else "Unlimited", inline=False)
-    embed.add_field(name="Expires", value=f"{expires_days} days" if expires_days>0 else "Never", inline=False)
+    embed.add_field(name="For Script", value=f"`{script-id}`", inline=False)
+    embed.add_field(name="Max Uses", value=f"{max-uses}" if max-uses>0 else "Unlimited", inline=False)
+    embed.add_field(name="Expires", value=f"{expires-days} days" if expires-days>0 else "Never", inline=False)
     await interaction.followup.send(embed=embed)
 
 @app.route('/v3/loaders/file/net.<script_id>.lua')
