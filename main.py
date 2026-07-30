@@ -5,7 +5,7 @@ import io
 from datetime import datetime, timedelta, timezone
 from threading import Thread
 import discord
-from discord import app_commands, File, ui, ButtonStyle
+from discord import app_commands, File, ui, ButtonStyle, SelectOption
 from discord.ext import commands
 import pymongo
 from pymongo.mongo_client import MongoClient
@@ -14,7 +14,7 @@ from flask import Flask, jsonify
 
 TOKEN = os.getenv("TOKEN")
 MONGODB_URI = os.getenv("MONGODB_URI")
-WEBSITE_DOMAIN = os.getenv("WEBSITE_DOMAIN", "api-booster.onrender.com")
+WEBSITE_DOMAIN = os.getenv("WEBSITE_DOMAIN", "api-rblxlua.onrender.com")
 
 app = Flask(__name__)
 
@@ -48,29 +48,75 @@ def get_clean_domain():
 class RedeemModal(ui.Modal, title="Redeem Your Key"):
     key_input = ui.TextInput(label="Enter Your Key", placeholder="NllN-llNl-NNlN-lNNl", min_length=19, max_length=19, required=True)
 
+    def __init__(self, script_id: str):
+        super().__init__()
+        self.target_script_id = script_id
+
     async def on_submit(self, interaction: discord.Interaction):
         key_val = self.key_input.value.strip().lower()
         key_data = keys_col.find_one({"key": key_val, "active": True})
         if not key_data:
             return await interaction.response.send_message("❌ Invalid or inactive key", ephemeral=True)
+        if key_data["script_id"] != self.target_script_id:
+            return await interaction.response.send_message("❌ This key is for a different script", ephemeral=True)
         if key_data["expires_at"] and datetime.now(timezone.utc) > key_data["expires_at"]:
             return await interaction.response.send_message("❌ This key has expired", ephemeral=True)
         if key_data["uses_left"] is not None and key_data["uses_left"] <= 0:
             return await interaction.response.send_message("❌ This key has no uses left", ephemeral=True)
-        script_data = scripts_col.find_one({"script_id": key_data["script_id"]})
-        if not script_data:
-            return await interaction.response.send_message("❌ Linked script not found", ephemeral=True)
-        existing = keys_col.find_one({"user_id": str(interaction.user.id), "script_id": key_data["script_id"]})
-        if existing and existing["key"] != key_val:
-            return await interaction.response.send_message("❌ You already have a key registered for this script", ephemeral=True)
-        keys_col.update_one({"key": key_val}, {"$set": {"user_id": str(interaction.user.id), "redeemed_at": datetime.now(timezone.utc)}})
+        keys_col.update_one(
+            {"key": key_val},
+            {"$set": {"user_id": str(interaction.user.id), "redeemed_at": datetime.now(timezone.utc)}}
+        )
         if key_data["uses_left"] is not None:
             keys_col.update_one({"key": key_val}, {"$inc": {"uses_left": -1}})
+        script_data = scripts_col.find_one({"script_id": self.target_script_id})
         if script_data.get("auto_apply") and script_data.get("role_id"):
             role = interaction.guild.get_role(int(script_data["role_id"]))
             if role:
                 await interaction.user.add_roles(role)
         await interaction.response.send_message(f"✅ Key redeemed successfully for **{script_data['name']}**", ephemeral=True)
+
+class KeySelectView(ui.View):
+    def __init__(self, user_keys, action_type: str):
+        super().__init__(timeout=120)
+        self.user_keys = user_keys
+        self.action_type = action_type
+        options = []
+        for idx, k in enumerate(user_keys):
+            s = scripts_col.find_one({"script_id": k["script_id"]})
+            label = s["name"][:45] if s else f"Script {idx+1}"
+            options.append(SelectOption(label=label, value=k["key"], description=f"Key: {k['key'][:8]}..."))
+        self.select_menu = ui.Select(
+            placeholder="Select which key to use",
+            options=options,
+            custom_id="key:select"
+        )
+        self.select_menu.callback = self.on_key_selected
+        self.add_item(self.select_menu)
+
+    async def on_key_selected(self, interaction: discord.Interaction):
+        selected_key = self.select_menu.values[0]
+        key_data = keys_col.find_one({"key": selected_key, "user_id": str(interaction.user.id), "active": True})
+        script = scripts_col.find_one({"script_id": key_data["script_id"]})
+        if self.action_type == "stats":
+            uses = key_data["uses_left"] if key_data["uses_left"] is not None else "Unlimited"
+            exp = "Never"
+            if key_data.get("expires_at"):
+                exp = key_data["expires_at"].strftime("%Y-%m-%d %H:%M UTC")
+            emb = discord.Embed(title="📊 Your Key Stats", color=0x95a5a6)
+            emb.add_field(name="Script", value=f"`{script['name']}`", inline=False)
+            emb.add_field(name="Key", value=f"`{key_data['key']}`", inline=False)
+            emb.add_field(name="Uses Remaining", value=f"`{uses}`", inline=False)
+            emb.add_field(name="Expires", value=f"`{exp}`", inline=False)
+            return await interaction.response.edit_message(embed=emb, view=None)
+        elif self.action_type == "script":
+            domain = get_clean_domain()
+            file_url = f"https://{domain}/v3/loaders/file/{key_data['script_id']}.lua"
+            file_content = f'getgenv().SCRIPT_KEY = "{key_data["key"]}"\n\nloadstring(game:HttpGet("{file_url}"))()'
+            file = File(io.BytesIO(file_content.encode("utf-8")), filename=script["filename"])
+            emb = discord.Embed(title="📜 Your Script", color=0x2ecc71)
+            emb.add_field(name="Loader", value=f"`getgenv().SCRIPT_KEY = \"{key_data['key']}\"`\n`loadstring(game:HttpGet(\"{file_url}\"))()`", inline=False)
+            return await interaction.response.edit_message(embed=emb, view=None, attachments=[file])
 
 class PanelView(ui.View):
     def __init__(self, script_id: str):
@@ -79,28 +125,30 @@ class PanelView(ui.View):
 
     @ui.button(label="Redeem Key", emoji="🔑", style=ButtonStyle.green, custom_id="panel:redeem")
     async def redeem_btn(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_modal(RedeemModal())
+        await interaction.response.send_modal(RedeemModal(self.script_id))
 
     @ui.button(label="Get Script", emoji="📜", style=ButtonStyle.blurple, custom_id="panel:getscript")
     async def getscript_btn(self, interaction: discord.Interaction, button: ui.Button):
-        user_key = keys_col.find_one({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True})
-        if not user_key:
+        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
+        if not user_keys:
             return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
-        script = scripts_col.find_one({"script_id": self.script_id})
-        if not script:
-            return await interaction.response.send_message("❌ Script not found", ephemeral=True)
-        domain = get_clean_domain()
-        file_url = f"https://{domain}/v3/loaders/file/{self.script_id}.lua"
-        file_content = f'getgenv().SCRIPT_KEY = "{user_key["key"]}"\n\nloadstring(game:HttpGet("{file_url}"))()'
-        file = File(io.BytesIO(file_content.encode("utf-8")), filename=script["filename"])
-        emb = discord.Embed(title="📜 Your Script", color=0x2ecc71)
-        emb.add_field(name="Loader", value=f"`getgenv().SCRIPT_KEY = \"{user_key['key']}\"`\n`loadstring(game:HttpGet(\"{file_url}\"))()`", inline=False)
-        await interaction.response.send_message(embed=emb, file=file, ephemeral=True)
+        if len(user_keys) == 1:
+            domain = get_clean_domain()
+            k = user_keys[0]
+            script = scripts_col.find_one({"script_id": self.script_id})
+            file_url = f"https://{domain}/v3/loaders/file/{self.script_id}.lua"
+            file_content = f'getgenv().SCRIPT_KEY = "{k["key"]}"\n\nloadstring(game:HttpGet("{file_url}"))()'
+            file = File(io.BytesIO(file_content.encode("utf-8")), filename=script["filename"])
+            emb = discord.Embed(title="📜 Your Script", color=0x2ecc71)
+            emb.add_field(name="Loader", value=f"`getgenv().SCRIPT_KEY = \"{k['key']}\"`\n`loadstring(game:HttpGet(\"{file_url}\"))()`", inline=False)
+            return await interaction.response.send_message(embed=emb, file=file, ephemeral=True)
+        view = KeySelectView(user_keys, "script")
+        await interaction.response.send_message("🔽 Select the key you want to use:", view=view, ephemeral=True)
 
     @ui.button(label="Get Role", emoji="👤", style=ButtonStyle.blurple, custom_id="panel:getrole")
     async def getrole_btn(self, interaction: discord.Interaction, button: ui.Button):
-        user_key = keys_col.find_one({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True})
-        if not user_key:
+        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
+        if not user_keys:
             return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
         script = scripts_col.find_one({"script_id": self.script_id})
         if not script or not script.get("role_id"):
@@ -115,27 +163,32 @@ class PanelView(ui.View):
 
     @ui.button(label="Reset HWID", emoji="⚙️", style=ButtonStyle.grey, custom_id="panel:resethwid")
     async def resethwid_btn(self, interaction: discord.Interaction, button: ui.Button):
-        user_key = keys_col.find_one({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True})
-        if not user_key:
+        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
+        if not user_keys:
             return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
-        hwid_col.delete_one({"user_id": str(interaction.user.id), "script_id": self.script_id})
+        hwid_col.delete_many({"user_id": str(interaction.user.id), "script_id": self.script_id})
         await interaction.response.send_message("✅ HWID cleared. You will be asked to set it again next run", ephemeral=True)
 
     @ui.button(label="Get Stats", emoji="📊", style=ButtonStyle.grey, custom_id="panel:getstats")
     async def getstats_btn(self, interaction: discord.Interaction, button: ui.Button):
-        user_key = keys_col.find_one({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True})
-        if not user_key:
+        user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
+        if not user_keys:
             return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
-        script = scripts_col.find_one({"script_id": self.script_id})
-        uses = user_key["uses_left"] if user_key["uses_left"] is not None else "Unlimited"
-        exp = "Never"
-        if user_key.get("expires_at"):
-            exp = user_key["expires_at"].strftime("%Y-%m-%d %H:%M UTC")
-        emb = discord.Embed(title="📊 Your Stats", color=0x95a5a6)
-        emb.add_field(name="Script", value=f"`{script['name']}`", inline=False)
-        emb.add_field(name="Uses Remaining", value=f"`{uses}`", inline=False)
-        emb.add_field(name="Expires", value=f"`{exp}`", inline=False)
-        await interaction.response.send_message(embed=emb, ephemeral=True)
+        if len(user_keys) == 1:
+            k = user_keys[0]
+            script = scripts_col.find_one({"script_id": self.script_id})
+            uses = k["uses_left"] if k["uses_left"] is not None else "Unlimited"
+            exp = "Never"
+            if k.get("expires_at"):
+                exp = k["expires_at"].strftime("%Y-%m-%d %H:%M UTC")
+            emb = discord.Embed(title="📊 Your Key Stats", color=0x95a5a6)
+            emb.add_field(name="Script", value=f"`{script['name']}`", inline=False)
+            emb.add_field(name="Key", value=f"`{k['key']}`", inline=False)
+            emb.add_field(name="Uses Remaining", value=f"`{uses}`", inline=False)
+            emb.add_field(name="Expires", value=f"`{exp}`", inline=False)
+            return await interaction.response.send_message(embed=emb, ephemeral=True)
+        view = KeySelectView(user_keys, "stats")
+        await interaction.response.send_message("🔽 Select which key to view stats:", view=view, ephemeral=True)
 
 @bot.event
 async def on_ready():
