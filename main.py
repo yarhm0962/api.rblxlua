@@ -3,7 +3,7 @@ import random
 import string
 import io
 import hashlib
-import asyncio  # <-- added for sleep
+import asyncio
 from datetime import datetime, timedelta, timezone
 from threading import Thread
 import discord
@@ -52,17 +52,13 @@ def hash_hwid(raw_hwid):
 # Simple Lua obfuscator: XOR + hex encoding with a random key
 # -------------------------------------------------------------------
 def obfuscate_lua(code: str) -> str:
-    # Generate a random 8‑character key (letters and digits)
     key = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-    # Encode the code to bytes, then XOR with the key (cyclically)
     data = code.encode('utf-8')
     key_bytes = key.encode('utf-8')
     xored = bytearray()
     for i, b in enumerate(data):
         xored.append(b ^ key_bytes[i % len(key_bytes)])
-    # Convert to hex string
     hex_str = xored.hex()
-    # Build the Lua loader that decodes and executes
     loader = f"""local key = "{key}"
 local encoded = "{hex_str}"
 local function decode(str)
@@ -136,7 +132,6 @@ class PanelView(ui.View):
         class SafeRedeemModal(ui.Modal, title="Redeem Your Key"):
             key_input = ui.TextInput(label="Enter Your Key", placeholder="NllN-llNl-NNlN-lNNl", min_length=19, max_length=19, required=True)
             async def on_submit(self, modal_interaction: discord.Interaction):
-                # --- VALIDATION (unchanged) ---
                 key_val = self.key_input.value.strip().lower()
                 key_data = keys_col.find_one({"key": key_val, "active": True})
                 if not key_data:
@@ -152,20 +147,17 @@ class PanelView(ui.View):
                     await modal_interaction.response.send_message("❌ No uses remaining on this key", ephemeral=True)
                     return
 
-                # --- DATABASE UPDATE ---
                 keys_col.update_one({"key": key_val},{"$set":{"user_id": str(modal_interaction.user.id), "redeemed_at": datetime.now(timezone.utc)}})
                 if key_data.get("uses_left") is not None:
                     keys_col.update_one({"key": key_val},{"$inc":{"uses_left": -1}})
 
                 script_data = scripts_col.find_one({"script_id": key_data["script_id"]})
 
-                # --- SEND SUCCESS MESSAGE FIRST (closes modal) ---
                 await modal_interaction.response.send_message(
                     f"✅ Successfully redeemed key for **{script_data['name']}**",
                     ephemeral=True
                 )
 
-                # --- ROLE ASSIGNMENT (with error handling, does not affect success message) ---
                 if script_data.get("auto_apply") and script_data.get("role_id"):
                     try:
                         role = modal_interaction.guild.get_role(int(script_data["role_id"]))
@@ -219,12 +211,10 @@ class PanelView(ui.View):
 
     @ui.button(label="Reset HWID", emoji="⚙️", style=ButtonStyle.grey, custom_id="panel:resethwid")
     async def resethwid_btn(self, interaction: discord.Interaction, button: ui.Button):
-        # --- Check if HWID record exists before clearing ---
         existing = hwid_col.find_one({"user_id": str(interaction.user.id), "script_id": self.script_id})
         if not existing:
             await interaction.response.send_message("❌ Your script has not been executed yet.", ephemeral=True)
             return
-        # Clear HWID
         hwid_col.delete_many({"user_id": str(interaction.user.id), "script_id": self.script_id})
         await interaction.response.send_message("✅ HWID cleared. Will re-register on next run", ephemeral=True)
 
@@ -258,33 +248,30 @@ async def on_ready():
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(role_id="Role ID to assign", auto_apply="Auto grant role", provider="Provider name (optional)", file="Lua or text file", embed_title="Panel title", embed_description="Panel description")
 async def create_script_cmd(interaction: discord.Interaction, role_id: str, auto_apply: bool, file: discord.Attachment, embed_title: str, embed_description: str = None, provider: str = None):
-    await interaction.response.defer(ephemeral=False)
+    # --- Defer ephemerally to hide the attachment preview ---
+    await interaction.response.defer(ephemeral=True)
     if not file.filename.endswith((".lua", ".txt")):
         return await interaction.followup.send("❌ Only .lua or .txt files supported", ephemeral=True)
     file_content = await file.read()
     script_id = os.urandom(16).hex()
 
-    # --- Send obfuscation status (ephemeral) ---
     status_msg = await interaction.followup.send("📄 Your Lua is still in Obfuscation..", ephemeral=True)
 
-    # --- Obfuscate the content ---
     obfuscated = obfuscate_lua(file_content.decode("utf-8", errors="replace"))
 
-    # --- Wait a moment so the status can be read, then delete it ---
-    await asyncio.sleep(2)  # <-- ensures the status is visible for 2 seconds
+    await asyncio.sleep(2)
     await status_msg.delete()
 
-    # --- Continue with script creation ---
     if not embed_description:
         embed_description = "**TO ACCESS SCRIPT VIA:**\n1. 🔑 Click the Redeem Key\n2. 📜 Click the Get Script\n3. 👤 Click the Get Role\n4. 📊 Click the Get Stats\n5. ⚙️ Click the Reset HWID (If needed)"
     script_data = {
         "script_id": script_id, "name": embed_title, "role_id": role_id, "auto_apply": auto_apply,
-        "provider": provider, "filename": file.filename, "content": obfuscated,  # store obfuscated content
+        "provider": provider, "filename": file.filename, "content": obfuscated,
         "embed_title": embed_title, "embed_description": embed_description, "created_at": datetime.now(timezone.utc)
     }
     scripts_col.insert_one(script_data)
     panel_emb = discord.Embed(title=embed_title, description=embed_description, color=0x3498db)
-    panel_emb.set_footer(text=f"SCRIPT_ID: {script_id}")   # Exactly as requested
+    panel_emb.set_footer(text=f"SCRIPT_ID: {script_id}")
     view = PanelView(script_id)
     panel_msg = await interaction.followup.send(embed=panel_emb, view=view)
     scripts_col.update_one({"script_id": script_id}, {"$set": {"panel_message_id": str(panel_msg.id), "panel_channel_id": str(interaction.channel.id)}})
@@ -321,7 +308,6 @@ def serve_script(script_id):
     if not script:
         return "Not Found", 404
 
-    # The stored content is already obfuscated; we wrap it with protection and key check
     key_check_code = '''local _K = getgenv and getgenv().SCRIPT_KEY or _G.SCRIPT_KEY or ""
 if not _K or #_K ~= 19 then game:GetService("Players").LocalPlayer:Kick("Missing or invalid SCRIPT_KEY\\nSet: getgenv().SCRIPT_KEY = \"YOUR_KEY\"") return end
 local _D = "''' + get_clean_domain() + '''"
