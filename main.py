@@ -1,4 +1,5 @@
 import os
+import asyncio
 import random
 import string
 import io
@@ -137,7 +138,7 @@ async def on_ready():
     await tree.sync()
     print(f"Ready: {bot.user}")
 
-@tree.command(name="create script", description="Create new script and control panel")
+@tree.command(name="create_script", description="Create new script and control panel")
 @app_commands.checks.has_permissions(administrator=True)
 async def create_script_cmd(
     interaction: discord.Interaction,
@@ -178,7 +179,7 @@ async def create_script_cmd(
     confirm_emb.add_field(name="Panel Created", value="✅ Sent here", inline=False)
     await interaction.followup.send(embed=confirm_emb, ephemeral=True)
 
-@tree.command(name="generate key", description="Generate new access key")
+@tree.command(name="generate_key", description="Generate new access key")
 @app_commands.checks.has_permissions(administrator=True)
 async def generate_key_cmd(
     interaction: discord.Interaction,
@@ -217,10 +218,17 @@ def serve_script(script_id):
     if not script: return "Not Found", 404
     return script["content"], 200, {"Content-Type":"text/plain; charset=utf-8"}
 
-from threading import Thread
-def run_flask():
-    app.run(host="0.0.0.0", port=10000, use_reloader=False)
+async def run_web():
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    cfg = Config()
+    cfg.bind = ["0.0.0.0:10000"]
+    await serve(app, cfg)
+
+async def main():
+    asyncio.create_task(run_web())
+    await bot.start(TOKEN)
 
 if __name__ == "__main__":
-    Thread(target=run_flask, daemon=True).start()
-    bot.run(TOKEN)
+    import hypercorn
+    asyncio.run(main())
