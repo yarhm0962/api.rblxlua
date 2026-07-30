@@ -96,26 +96,38 @@ class PanelView(ui.View):
         current_script_id = self.script_id
         class SafeRedeemModal(ui.Modal, title="Redeem Your Key"):
             key_input = ui.TextInput(label="Enter Your Key", placeholder="NllN-llNl-NNlN-lNNl", min_length=19, max_length=19, required=True)
-            async def on_submit(this, int: discord.Interaction):
-                key_val = this.key_input.value.strip().lower()
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                key_val = self.key_input.value.strip().lower()
                 key_data = keys_col.find_one({"key": key_val, "active": True})
-                if not key_data: return await int.response.send_message("❌ Invalid or inactive key", ephemeral=True)
-                if key_data["script_id"] != current_script_id: return await int.response.send_message("❌ This key belongs to a different script", ephemeral=True)
-                if key_data.get("expires_at") and datetime.now(timezone.utc) > key_data["expires_at"]: return await int.response.send_message("❌ This key has expired", ephemeral=True)
-                if key_data.get("uses_left") is not None and key_data["uses_left"] <= 0: return await int.response.send_message("❌ No uses remaining on this key", ephemeral=True)
-                keys_col.update_one({"key": key_val},{"$set":{"user_id": str(int.user.id), "redeemed_at": datetime.now(timezone.utc)}})
-                if key_data.get("uses_left") is not None: keys_col.update_one({"key": key_val},{"$inc":{"uses_left": -1}})
+                if not key_data:
+                    await modal_interaction.response.send_message("❌ Invalid or inactive key", ephemeral=True)
+                    return
+                if key_data["script_id"] != current_script_id:
+                    await modal_interaction.response.send_message("❌ This key belongs to a different script", ephemeral=True)
+                    return
+                if key_data.get("expires_at") and datetime.now(timezone.utc) > key_data["expires_at"]:
+                    await modal_interaction.response.send_message("❌ This key has expired", ephemeral=True)
+                    return
+                if key_data.get("uses_left") is not None and key_data["uses_left"] <= 0:
+                    await modal_interaction.response.send_message("❌ No uses remaining on this key", ephemeral=True)
+                    return
+                keys_col.update_one({"key": key_val},{"$set":{"user_id": str(modal_interaction.user.id), "redeemed_at": datetime.now(timezone.utc)}})
+                if key_data.get("uses_left") is not None:
+                    keys_col.update_one({"key": key_val},{"$inc":{"uses_left": -1}})
                 script_data = scripts_col.find_one({"script_id": key_data["script_id"]})
                 if script_data.get("auto_apply") and script_data.get("role_id"):
-                    role = int.guild.get_role(int(script_data["role_id"]))
-                    if role: await int.user.add_roles(role)
-                await int.response.send_message(f"✅ Successfully redeemed key for **{script_data['name']}**", ephemeral=True)
+                    role = modal_interaction.guild.get_role(int(script_data["role_id"]))
+                    if role:
+                        await modal_interaction.user.add_roles(role)
+                await modal_interaction.response.send_message(f"✅ Successfully redeemed key for **{script_data['name']}**", ephemeral=True)
+                return  # ensure we exit cleanly
         await interaction.response.send_modal(SafeRedeemModal())
 
     @ui.button(label="Get Script", emoji="📜", style=ButtonStyle.blurple, custom_id="panel:getscript")
     async def getscript_btn(self, interaction: discord.Interaction, button: ui.Button):
         user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
-        if not user_keys: return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
+        if not user_keys:
+            return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
         if len(user_keys) == 1:
             domain = get_clean_domain()
             k = user_keys[0]
@@ -132,26 +144,32 @@ class PanelView(ui.View):
     @ui.button(label="Get Role", emoji="👤", style=ButtonStyle.blurple, custom_id="panel:getrole")
     async def getrole_btn(self, interaction: discord.Interaction, button: ui.Button):
         user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
-        if not user_keys: return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
+        if not user_keys:
+            return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
         script = scripts_col.find_one({"script_id": self.script_id})
-        if not script or not script.get("role_id"): return await interaction.response.send_message("❌ No role configured for this script", ephemeral=True)
+        if not script or not script.get("role_id"):
+            return await interaction.response.send_message("❌ No role configured for this script", ephemeral=True)
         role = interaction.guild.get_role(int(script["role_id"]))
-        if not role: return await interaction.response.send_message("❌ Role not found", ephemeral=True)
-        if role in interaction.user.roles: return await interaction.response.send_message("✅ You already have this role", ephemeral=True)
+        if not role:
+            return await interaction.response.send_message("❌ Role not found", ephemeral=True)
+        if role in interaction.user.roles:
+            return await interaction.response.send_message("✅ You already have this role", ephemeral=True)
         await interaction.user.add_roles(role)
         await interaction.response.send_message(f"✅ Role granted: {role.mention}", ephemeral=True)
 
     @ui.button(label="Reset HWID", emoji="⚙️", style=ButtonStyle.grey, custom_id="panel:resethwid")
     async def resethwid_btn(self, interaction: discord.Interaction, button: ui.Button):
         user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
-        if not user_keys: return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
+        if not user_keys:
+            return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
         hwid_col.delete_many({"user_id": str(interaction.user.id), "script_id": self.script_id})
         await interaction.response.send_message("✅ HWID cleared. Will re-register on next run", ephemeral=True)
 
     @ui.button(label="Get Stats", emoji="📊", style=ButtonStyle.grey, custom_id="panel:getstats")
     async def getstats_btn(self, interaction: discord.Interaction, button: ui.Button):
         user_keys = list(keys_col.find({"user_id": str(interaction.user.id), "script_id": self.script_id, "active": True}))
-        if not user_keys: return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
+        if not user_keys:
+            return await interaction.response.send_message("❌ Redeem a valid key first", ephemeral=True)
         if len(user_keys) == 1:
             k = user_keys[0]
             script = scripts_col.find_one({"script_id": self.script_id})
@@ -178,11 +196,12 @@ async def on_ready():
 @app_commands.describe(role_id="Role ID to assign", auto_apply="Auto grant role", provider="Provider name (optional)", file="Lua or text file", embed_title="Panel title", embed_description="Panel description")
 async def create_script_cmd(interaction: discord.Interaction, role_id: str, auto_apply: bool, file: discord.Attachment, embed_title: str, embed_description: str = None, provider: str = None):
     await interaction.response.defer(ephemeral=False)
-    if not file.filename.endswith((".lua", ".txt")): return await interaction.followup.send("❌ Only .lua or .txt files supported", ephemeral=True)
+    if not file.filename.endswith((".lua", ".txt")):
+        return await interaction.followup.send("❌ Only .lua or .txt files supported", ephemeral=True)
     file_content = await file.read()
     script_id = os.urandom(16).hex()
     if not embed_description:
-        embed_description = "This control panel belongs to RblXLua Development. Redeem a valid key to access this script."
+        embed_description = "**TO ACCESS SCRIPT VIA:**\n1. 🔑 Click the Redeem Key\n2. 📜 Click the Get Script\n3. 👤 Click the Get Role\n4. 📊 Click the Get Stats\n5. ⚙️ Click the Reset HWID (If needed)"
     script_data = {
         "script_id": script_id, "name": embed_title, "role_id": role_id, "auto_apply": auto_apply,
         "provider": provider, "filename": file.filename, "content": file_content.decode("utf-8", errors="replace"),
@@ -190,7 +209,7 @@ async def create_script_cmd(interaction: discord.Interaction, role_id: str, auto
     }
     scripts_col.insert_one(script_data)
     panel_emb = discord.Embed(title=embed_title, description=embed_description, color=0x3498db)
-    panel_emb.set_footer(text=f"Script ID: {script_id}" + (f" | Provider: {provider}" if provider else ""))
+    panel_emb.set_footer(text=script_id)   # Only the script_id, no extra text
     view = PanelView(script_id)
     panel_msg = await interaction.followup.send(embed=panel_emb, view=view)
     scripts_col.update_one({"script_id": script_id}, {"$set": {"panel_message_id": str(panel_msg.id), "panel_channel_id": str(interaction.channel.id)}})
@@ -205,7 +224,8 @@ async def create_script_cmd(interaction: discord.Interaction, role_id: str, auto
 async def generate_key_cmd(interaction: discord.Interaction, script_id: str, max_uses: int = 0, expires_days: int = 0):
     await interaction.response.defer(ephemeral=True)
     exists = scripts_col.find_one({"script_id": script_id})
-    if not exists: return await interaction.followup.send("❌ Script ID not found", ephemeral=True)
+    if not exists:
+        return await interaction.followup.send("❌ Script ID not found", ephemeral=True)
     key_value = generate_formatted_key()
     expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days) if expires_days > 0 else None
     key_data = {
@@ -223,7 +243,8 @@ async def generate_key_cmd(interaction: discord.Interaction, script_id: str, max
 @app.route('/v3/loaders/file/<script_id>.lua')
 def serve_script(script_id):
     script = scripts_col.find_one({"script_id": script_id})
-    if not script: return "Not Found", 404
+    if not script:
+        return "Not Found", 404
 
     key_check_code = '''local _K = getgenv and getgenv().SCRIPT_KEY or _G.SCRIPT_KEY or ""
 if not _K or #_K ~= 19 then game:GetService("Players").LocalPlayer:Kick("Missing or invalid SCRIPT_KEY\\nSet: getgenv().SCRIPT_KEY = \"YOUR_KEY\"") return end
@@ -248,11 +269,15 @@ def verify_key():
     key = request.args.get("key")
     script_id = request.args.get("script")
     raw_hwid = request.args.get("hwid")
-    if not key or not script_id: return jsonify({"valid": False}), 400
+    if not key or not script_id:
+        return jsonify({"valid": False}), 400
     key_data = keys_col.find_one({"key": key, "script_id": script_id, "active": True})
-    if not key_data: return jsonify({"valid": False}), 200
-    if key_data.get("expires_at") and datetime.now(timezone.utc) > key_data["expires_at"]: return jsonify({"valid": False}), 200
-    if key_data.get("uses_left") is not None and key_data["uses_left"] <= 0: return jsonify({"valid": False}), 200
+    if not key_data:
+        return jsonify({"valid": False}), 200
+    if key_data.get("expires_at") and datetime.now(timezone.utc) > key_data["expires_at"]:
+        return jsonify({"valid": False}), 200
+    if key_data.get("uses_left") is not None and key_data["uses_left"] <= 0:
+        return jsonify({"valid": False}), 200
 
     if raw_hwid:
         hashed = hash_hwid(raw_hwid)
@@ -260,13 +285,16 @@ def verify_key():
         if not existing:
             hwid_col.insert_one({"key": key, "script_id": script_id, "hwid_hash": hashed, "created_at": datetime.now(timezone.utc)})
         else:
-            if existing["hwid_hash"] != hashed: return jsonify({"valid": True, "hwid_ok": False}), 200
+            if existing["hwid_hash"] != hashed:
+                return jsonify({"valid": True, "hwid_ok": False}), 200
     return jsonify({"valid": True, "hwid_ok": True}), 200
 
 @app.errorhandler(404)
-def page_not_found(e): return jsonify(error="Not Found"), 404
+def page_not_found(e):
+    return jsonify(error="Not Found"), 404
 
-def run_flask(): app.run(host="0.0.0.0", port=10000)
+def run_flask():
+    app.run(host="0.0.0.0", port=10000)
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
